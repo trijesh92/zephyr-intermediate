@@ -5,66 +5,46 @@ LOG_MODULE_REGISTER(demo, LOG_LEVEL_DBG);
 
 #define STACK_SIZE 1024
 
-#define PRIO_COP -1
-#define PRIO_LOW 7
-#define PRIO_MED 5
-#define PRIO_HIGH 3
+#define PRIO_THREAD 1
+#define INCREMENTS 1000000
 
-#define T_PRIO_LOW_SLEEP 300
-#define T_PRIO_MED_SLEEP 200
-#define T_PRIO_HIGH_SLEEP 100
+struct k_sem done_sem;
+static K_MUTEX_DEFINE(counter_mutex);
 
-void t_cop_fn(void *p1, void *p2, void *p3)
+static volatile uint32_t counter = 0;
+
+void worker_thread(void *p1, void *p2, void *p3)
 {
-    for(uint8_t i=0;i<5;i++)
-    {
-        LOG_INF("T_COP  step=%d tick=%d", i, k_uptime_get_32());
+    const char *name = k_thread_name_get(k_current_get());
+    for (int i = 0; i < INCREMENTS; i++) {
+        k_mutex_lock(&counter_mutex, K_FOREVER);
+        counter++;
+        k_mutex_unlock(&counter_mutex);
     }
-    k_yield();
+
+    LOG_INF("[%s] finished", name);
+    k_sem_give(&done_sem);
 }
 
-void t_low_fn(void *p1, void *p2, void *p3)
-{
-    uint8_t i = 0;
-    while (1) {
-        LOG_INF("T_LOW  step=%d tick=%d", i, k_uptime_get_32());
-        k_msleep(T_PRIO_LOW_SLEEP);
-        i++;
-    }
-}
-
-void t_med_fn(void *p1, void *p2, void *p3)
-{
-    uint8_t i = 0;
-    while (1) {
-        LOG_INF("T_MED  step=%d tick=%d", i, k_uptime_get_32());
-        k_msleep(T_PRIO_MED_SLEEP);
-        i++;
-    }
-}
-
-void t_high_fn(void *p1, void *p2, void *p3)
-{
-    uint8_t i = 0;
-    while (1) {
-        LOG_INF("T_HIGH step=%d tick=%d", i, k_uptime_get_32());
-        k_msleep(T_PRIO_HIGH_SLEEP);
-        i++;
-    }
-}
-
-K_THREAD_DEFINE(thread_low, STACK_SIZE, t_low_fn,
-                NULL, NULL, NULL, PRIO_LOW, 0, 0);
-K_THREAD_DEFINE(thread_med, STACK_SIZE, t_med_fn,
-                NULL, NULL, NULL, PRIO_MED, 0, 0);
-K_THREAD_DEFINE(thread_high, STACK_SIZE, t_high_fn,
-                NULL, NULL, NULL, PRIO_HIGH, 0, 0);
-K_THREAD_DEFINE(thread_cop, STACK_SIZE, t_cop_fn,
-                NULL, NULL, NULL, PRIO_COP, 0, 0);
+K_THREAD_DEFINE(worker_a, STACK_SIZE, worker_thread,
+                NULL, NULL, NULL, PRIO_THREAD, 0, 0);
+K_THREAD_DEFINE(worker_b, STACK_SIZE, worker_thread,
+                NULL, NULL, NULL, PRIO_THREAD, 0, 0);
 
 int main(void)
 {
-    LOG_INF("Zephyr Thread Scheduling Demo");
+    LOG_INF("Zephyr Thread Mutex Demo");
+    int64_t time = k_uptime_get();
+    k_sem_init(&done_sem, 0, 2);
+    k_sem_take(&done_sem, K_FOREVER);
+    k_sem_take(&done_sem, K_FOREVER);
+
+    if(counter != 2 * INCREMENTS) {
+        LOG_ERR("Counter value is incorrect: %d", counter);
+    } else {
+        LOG_INF("Counter value is correct: %d", counter);
+    }
+    LOG_INF("Execution time: %lld ms", k_uptime_delta(&time));
     return 0;
 }
 
