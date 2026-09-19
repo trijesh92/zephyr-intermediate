@@ -1,186 +1,120 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
-#include<zephyr/task_wdt/task_wdt.h>
+#include <zephyr/tracing/tracing.h>
 
-LOG_MODULE_REGISTER(demo, LOG_LEVEL_DBG);
+LOG_MODULE_REGISTER(homework, LOG_LEVEL_INF);
 
-#define STACK_SIZE 1024
+#define STACK_SIZE            2048
+#define CONTROL_PRIORITY         4
+#define MAINTENANCE_PRIORITY     7
+#define EVENT_PERIOD_MS        250
+#define MAINTENANCE_LOAD_US  45000
+#define DEADLINE_MS            10
 
-static int chan = -1;
-
-/* ================================================================== */
-/*  Shared message type                                               */
-/* ================================================================== */
-
-struct sensor_msg {
-    uint32_t timestamp_ms;
-    int32_t value;
+struct control_event {
     uint32_t seq;
+    uint32_t ready_ms;
 };
 
+K_MSGQ_DEFINE(control_queue, sizeof(struct control_event), 4, 4);
+K_SEM_DEFINE(maintenance_start, 0, 1);
+
 /* ================================================================== */
-/*  Thread-to-thread pipeline                                */
+/*  Timer expiry: creates one control event                           */
 /* ================================================================== */
 
-#define QUEUE_DEPTH 50
-#define COUNT       400
-
-K_MSGQ_DEFINE(sensor_msg_q, sizeof(struct sensor_msg), QUEUE_DEPTH, 4);
-
-static K_SEM_DEFINE(prod_done, 0, 1);
-static K_SEM_DEFINE(cons_done, 0, 1);
-
-static volatile bool prod_finished;
-
-static void producer(void *p1, void *p2, void *p3)
+static void event_timer_expiry(struct k_timer *timer)
 {
-    ARG_UNUSED(p1); ARG_UNUSED(p2); ARG_UNUSED(p3);
+    ARG_UNUSED(timer);
 
-    k_thread_name_set(k_current_get(), "prod");
+    static uint32_t seq;
+    struct control_event event = {
+        .seq = seq++,
+        .ready_ms = k_uptime_get_32(),
+    };
 
-    for (int i = 0; i < COUNT; i++) {
-        struct sensor_msg msg = {
-            .timestamp_ms = k_uptime_get_32(),
-            .value = 100 + i,
-            .seq = (uint32_t)i,
-        };
+    /* Timer expiry runs in interrupt context, so never wait here. */
+    int ret = k_msgq_put(&control_queue, &event, K_NO_WAIT);
 
-        int ret = k_msgq_put(&sensor_msg_q, &msg, K_MSEC(200));
-        if (ret == 0) {
-            LOG_INF("[PROD] sent seq=%u val=%d q=%u/%d",
-                    msg.seq,
-                    msg.value,
-                    k_msgq_num_used_get(&sensor_msg_q),
-                    QUEUE_DEPTH);
-        } else {
-            LOG_WRN("[PROD] put failed ret=%d", ret);
-        }
-
-        k_msleep(50);
+    if (ret != 0) {
+        return;
     }
 
-    prod_finished = true;
-    LOG_INF("[PROD] done");
-    k_sem_give(&prod_done);
+    /* Both threads become ready when the timer interrupt returns. */
+    k_sem_give(&maintenance_start);
+
+    /* TODO: Add an application trace event for this sequence. */
 }
 
-static void consumer(void *p1, void *p2, void *p3)
+K_TIMER_DEFINE(event_timer, event_timer_expiry, NULL);
+
+/* ================================================================== */
+/*  Control thread                                                   */
+/* ================================================================== */
+
+static void control_fn(void *p1, void *p2, void *p3)
 {
     ARG_UNUSED(p1); ARG_UNUSED(p2); ARG_UNUSED(p3);
-
-    k_thread_name_set(k_current_get(), "cons");
+    static uint32_t deadline_misses = 0;
 
     while (true) {
-        struct sensor_msg msg = {0};
+        struct control_event event;
+        int ret = k_msgq_get(&control_queue, &event, K_FOREVER);
 
-        int ret = k_msgq_get(&sensor_msg_q, &msg, K_MSEC(300));
         if (ret != 0) {
-            if (prod_finished && k_msgq_num_used_get(&sensor_msg_q) == 0) {
-                break;
-            }
-
-            LOG_WRN("[CONS] timeout waiting for message");
+            LOG_ERR("[CONTROL] receive failed: %d", ret);
             continue;
         }
 
-        uint32_t latency = k_uptime_get_32() - msg.timestamp_ms;
+        LOG_INF("[CONTROL] processed seq=%u", event.seq);
 
-        LOG_INF("[CONS] got seq=%u val=%d q=%u/%d latency=%ums",
-                msg.seq,
-                msg.value,
-                k_msgq_num_used_get(&sensor_msg_q),
-                QUEUE_DEPTH,
-                latency);
-        
-        task_wdt_feed(chan);
-        if (msg.seq == COUNT/2) {
-            k_msleep(1500);
+        /* response-time guarantee. */
+        uint32_t latency_ms = k_uptime_get_32() - event.ready_ms;
+        /* Measure latency and count every deadline miss. */
+        if(latency_ms > DEADLINE_MS) {
+            deadline_misses++;
+            /* Rate-limit repeated warning messages. */
+            LOG_WRN_RATELIMIT("[CONTROL] deadline_miss count=%u seq=%u latency=%ums",
+                    deadline_misses, event.seq, latency_ms);
         }
-        k_msleep(60);
+        else {
+            LOG_INF("[CONTROL] event_done seq=%u latency=%ums",
+                    event.seq, latency_ms);
+        }
+        /* Add an application trace event for completion. */
+        sys_trace_named_event("event_done", event.seq, latency_ms);
     }
-
-    LOG_INF("[CONS] done");
-    k_sem_give(&cons_done);
 }
 
 /* ================================================================== */
-/*  Runtime threads                                                   */
+/*  Background maintenance thread                                    */
 /* ================================================================== */
 
-K_THREAD_STACK_DEFINE(prod_stack, STACK_SIZE);
-K_THREAD_STACK_DEFINE(cons_stack, STACK_SIZE);
-K_THREAD_STACK_DEFINE(health_stack, STACK_SIZE);
-
-static struct k_thread prod_thread;
-static struct k_thread cons_thread;
-static struct k_thread health_thread;
-/* ================================================================== */
-/*  Watchdog task                                                     */
-/* ================================================================== */
-void watchdog_timeout_callback(int channelId, void *arg)
-{
-    k_tid_t thread = (k_tid_t)arg;
-    LOG_ERR("[WATCHDOG] (channel %d) Thread %p (%s) has exceeded its watchdog timeout!", channelId, thread, k_thread_name_get(thread));
-}
-
-/* ================================================================== */
-/*  Health monitor                                                    */
-/* ================================================================== */
-
-static void health_fn(void *p1, void *p2, void *p3)
+static void maintenance_fn(void *p1, void *p2, void *p3)
 {
     ARG_UNUSED(p1); ARG_UNUSED(p2); ARG_UNUSED(p3);
 
-    while(true) {
-        uint32_t used = k_msgq_num_used_get(&sensor_msg_q);
-        if(used > (QUEUE_DEPTH * 3 / 4)) {
-            LOG_WRN("[HEALTH] queue is %u/%u full", used, QUEUE_DEPTH);
-        }
-        k_msleep(120);
+    while (true) {
+        k_sem_take(&maintenance_start, K_FOREVER);
+
+        /* This work is important, but it has no short deadline. */
+        k_busy_wait(MAINTENANCE_LOAD_US);
     }
 }
 
-/* ================================================================== */
-/*  Main                                                              */
-/* ================================================================== */
+K_THREAD_DEFINE(control, STACK_SIZE, control_fn,
+                NULL, NULL, NULL, CONTROL_PRIORITY, 0, 0);
+
+K_THREAD_DEFINE(maintenance, STACK_SIZE, maintenance_fn,
+                NULL, NULL, NULL, MAINTENANCE_PRIORITY, 0, 0);
 
 int main(void)
 {
-    LOG_INF("=== L5 Task1 ===");
-    LOG_INF("sizeof(sensor_msg)=%u", sizeof(struct sensor_msg));
+    LOG_INF("=== L6 Homework: Runtime Investigation ===");
+    LOG_INF("Control work must start within 10 ms");
+    LOG_INF("Inspect, measure, trace, explain, and correct the delay");
 
-    k_msgq_purge(&sensor_msg_q);
-    prod_finished = false;
-
-    k_thread_create(&prod_thread, prod_stack,
-                    K_THREAD_STACK_SIZEOF(prod_stack), producer, 
-                    NULL, NULL, NULL, 5, 0, K_NO_WAIT);
-
-    /*
-    * Let producer get ahead.
-    * This makes the queue buffer real messages instead of direct handoff.
-    */
-    k_msleep(180);
-
-    k_thread_create(&cons_thread,
-                    cons_stack,
-                    K_THREAD_STACK_SIZEOF(cons_stack), consumer,
-                    NULL, NULL, NULL, 5, 0, K_NO_WAIT);
-
-    k_thread_create(&health_thread,
-                health_stack,
-                K_THREAD_STACK_SIZEOF(health_stack), health_fn,
-                NULL, NULL, NULL, 6, 0, K_NO_WAIT);
-
-    task_wdt_init(NULL);
-    chan = task_wdt_add(1000,watchdog_timeout_callback,(void *)k_current_get());
-    
-
-    k_sem_take(&prod_done, K_FOREVER);
-    k_sem_take(&cons_done, K_FOREVER);
-
-    LOG_INF("\n=== Demo complete ===");
+    k_timer_start(&event_timer, K_MSEC(500), K_MSEC(EVENT_PERIOD_MS));
 
     return 0;
 }
-
