@@ -1,3 +1,7 @@
 docker build --build-arg UID=1000 --build-arg GID=1000 -t zephyr-sb:3.7.2 docker
 
 docker run --rm -it --volume "E:\ZZ_TestProjects\workspace_zephyr\zephyr-intermediate:/opt/zephyr-ws/app" --entrypoint /bin/bash zephyr-sb:3.7.2
+
+
+west build -d build -p always -b "mps2/an521/cpu0" .
+west build -d build -t hardenconfig
