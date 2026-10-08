@@ -41,28 +41,42 @@ ZTEST_SUITE(temp_alarm_sensor_errors, NULL, NULL, before, NULL, NULL);
 
 ZTEST(temp_alarm_sensor_errors, test_fetch_error_propagates)
 {
-	/* TODO(l8-task2): a failed fetch is reported,
-	 * and the module does not go on to read the channel.
-	 * See TEST_SPEC.md "Suite temp_alarm_sensor_errors" #1.
-	 */
-	ztest_test_skip();
+	fake_sensor_sample_fetch_fake.return_val = -EIO;
+
+	zassert_equal(temp_alarm_check(), -EIO,
+		      "fetch error must be propagated");
+	zassert_equal(fake_sensor_channel_get_fake.call_count, 0,
+		      "channel must not be read after a fetch error");
 }
 
 ZTEST(temp_alarm_sensor_errors, test_channel_get_error_propagates)
 {
-	/* TODO(l8-task2): a failed channel read is reported.
-	 * See TEST_SPEC.md "Suite temp_alarm_sensor_errors" #2.
-	 */
-	ztest_test_skip();
+	fake_sensor_sample_fetch_fake.return_val = 0;
+	/* Use the configured fake return value rather than a custom callback. */
+	fake_sensor_channel_get_fake.custom_fake = NULL;
+	fake_sensor_channel_get_fake.return_val = -EIO;
+
+	zassert_equal(temp_alarm_check(), -EIO,
+		      "channel read error must be propagated");
+	zassert_equal(fake_sensor_sample_fetch_fake.call_count, 1,
+		      "the sensor must be sampled before the channel read");
 }
 
 ZTEST(temp_alarm_sensor_errors, test_fail_then_recover)
 {
-	/* TODO(l8-task2): the first fetch fails and the second one succeeds.
-	 * The module must recover on the second check.
-	 * See TEST_SPEC.md "Suite temp_alarm_sensor_errors" #3.
-	 */
-	ztest_test_skip();
+	fake_sensor_sample_fetch_fake.return_val = -EIO;
+	zassert_equal(temp_alarm_check(), -EIO,
+		      "the first fetch error must be propagated");
+	zassert_equal(fake_sensor_sample_fetch_fake.call_count, 1,
+		      "the first check must fetch once");
+
+	fake_sensor_sample_fetch_fake.return_val = 0;
+	zassert_equal(temp_alarm_check(), 0,
+		      "the module must recover when the next fetch succeeds");
+	zassert_equal(fake_sensor_sample_fetch_fake.call_count, 2,
+		      "the second check must fetch again");
+	zassert_equal(fake_sensor_channel_get_fake.call_count, 1,
+		      "the channel must be read after the successful fetch");
 }
 
 /*
@@ -76,33 +90,28 @@ ZTEST_SUITE(temp_alarm_invalid_input, NULL, NULL, before, NULL, NULL);
 
 ZTEST(temp_alarm_invalid_input, test_get_status_null)
 {
-	/* TODO(l8-task2): a NULL status pointer is rejected.
-	 * See TEST_SPEC.md "Suite temp_alarm_invalid_input" #1.
-	 */
-	ztest_test_skip();
+	zassert_equal(temp_alarm_get_status(NULL), -EINVAL,
+		      "a NULL status pointer must be rejected");
 }
 
 ZTEST(temp_alarm_invalid_input, test_init_without_device)
 {
-	/* TODO(l8-task2): init without a sensor device is rejected.
-	 * See TEST_SPEC.md "Suite temp_alarm_invalid_input" #2.
-	 */
-	ztest_test_skip();
+	zassert_equal(temp_alarm_init(NULL, DEFAULT_THRESHOLD), -ENODEV,
+		      "init must reject a NULL sensor device");
 }
 
 ZTEST(temp_alarm_invalid_input, test_init_threshold_out_of_range)
 {
-	/* TODO(l8-task2): init rejects thresholds outside the allowed range.
-	 * See TEST_SPEC.md "Suite temp_alarm_invalid_input" #3.
-	 */
-	ztest_test_skip();
+	zassert_equal(temp_alarm_init(&fake_sensor_dev, -1), -EINVAL,
+		      "init must reject a threshold below the allowed range");
+	zassert_equal(temp_alarm_init(&fake_sensor_dev, 101), -EINVAL,
+		      "init must reject a threshold above the allowed range");
 }
 
 ZTEST(temp_alarm_invalid_input, test_set_threshold_out_of_range)
 {
-	/* TODO(l8-task2): set_threshold rejects values outside the allowed range,
-	 * and keeps the old threshold.
-	 * See TEST_SPEC.md "Suite temp_alarm_invalid_input" #4.
-	 */
-	ztest_test_skip();
+	zassert_equal(temp_alarm_set_threshold(-1), -EINVAL,
+		      "set_threshold must reject a threshold below the allowed range");
+	zassert_equal(temp_alarm_set_threshold(101), -EINVAL,
+		      "set_threshold must reject a threshold above the allowed range");
 }
