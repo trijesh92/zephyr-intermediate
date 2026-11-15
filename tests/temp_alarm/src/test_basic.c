@@ -83,7 +83,7 @@ ZTEST(temp_alarm_check, test_below_threshold)
 	zassert_equal(status.last_error, 0, "last_error must remain 0");
 	zassert_equal(fake_sensor_sample_fetch_fake.call_count, 1U,
 		      "the sensor must be sampled once");
-	zassert_equal(fake_sensor_channel_get_fake.call_count, 1U,
+	zassert_equal(fake_sensor_channel_get_fake.arg1_val, SENSOR_CHAN_AMBIENT_TEMP,
 		      "the temperature channel must be read once");
 }
 
@@ -147,6 +147,7 @@ ZTEST(temp_alarm_threshold, test_new_threshold_clears_alarm)
 
 	zassert_ok(temp_alarm_check(), "check must succeed");
 	zassert_ok(temp_alarm_get_status(&status), "get_status must succeed");
+	zassert_equal(status.alarm_count, 1U, "alarm_count must remain 1 after threshold change");
 	zassert_false(status.is_alarming, "40 C must remain below the new threshold");
 }
 
