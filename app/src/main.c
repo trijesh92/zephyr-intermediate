@@ -6,7 +6,9 @@ LOG_MODULE_REGISTER(demo, LOG_LEVEL_DBG);
 #define STACK_SIZE 1024
 
 #define PRIO_THREAD 1
-#define INCREMENTS 1000000
+#define INCREMENTS 1000
+
+#define WITH_MUTEX 1
 
 struct k_sem done_sem;
 static K_MUTEX_DEFINE(counter_mutex);
@@ -14,6 +16,17 @@ static K_MUTEX_DEFINE(counter_mutex);
 static volatile uint32_t counter = 0;
 
 void worker_thread(void *p1, void *p2, void *p3)
+{
+    const char *name = k_thread_name_get(k_current_get());
+    for (int i = 0; i < INCREMENTS; i++) {
+        counter++;
+    }
+
+    LOG_INF("[%s] finished", name);
+    k_sem_give(&done_sem);
+}
+
+void worker_thread_with_mutex(void *p1, void *p2, void *p3)
 {
     const char *name = k_thread_name_get(k_current_get());
     for (int i = 0; i < INCREMENTS; i++) {
@@ -26,19 +39,28 @@ void worker_thread(void *p1, void *p2, void *p3)
     k_sem_give(&done_sem);
 }
 
+#if WITH_MUTEX
 K_THREAD_DEFINE(worker_a, STACK_SIZE, worker_thread,
                 NULL, NULL, NULL, PRIO_THREAD, 0, 0);
 K_THREAD_DEFINE(worker_b, STACK_SIZE, worker_thread,
                 NULL, NULL, NULL, PRIO_THREAD, 0, 0);
+#else
+K_THREAD_DEFINE(worker_a, STACK_SIZE, worker_thread,
+                NULL, NULL, NULL, PRIO_THREAD, 0, 0);   
+K_THREAD_DEFINE(worker_b, STACK_SIZE, worker_thread,
+                NULL, NULL, NULL, PRIO_THREAD, 0, 0);
+#endif
 
 int main(void)
 {
     LOG_INF("Zephyr Thread Mutex Demo");
     int64_t time = k_uptime_get();
+
+#if WITH_MUTEX
     k_sem_init(&done_sem, 0, 2);
     k_sem_take(&done_sem, K_FOREVER);
     k_sem_take(&done_sem, K_FOREVER);
-
+#endif
     if(counter != 2 * INCREMENTS) {
         LOG_ERR("Counter value is incorrect: %d", counter);
     } else {
