@@ -47,6 +47,11 @@ ZTEST(temp_alarm_sensor_errors, test_fetch_error_propagates)
 		      "fetch error must be propagated");
 	zassert_equal(fake_sensor_channel_get_fake.call_count, 0,
 		      "channel must not be read after a fetch error");
+	struct temp_alarm_status status;
+	zassert_equal(temp_alarm_get_status(&status), 0,
+		      "get_status must succeed even after a fetch error");
+	zassert_equal(status.last_error, -EIO,
+		      "get_status must report the last error from the sensor driver");
 }
 
 ZTEST(temp_alarm_sensor_errors, test_channel_get_error_propagates)
@@ -60,15 +65,27 @@ ZTEST(temp_alarm_sensor_errors, test_channel_get_error_propagates)
 		      "channel read error must be propagated");
 	zassert_equal(fake_sensor_sample_fetch_fake.call_count, 1,
 		      "the sensor must be sampled before the channel read");
+	struct temp_alarm_status status;
+	zassert_equal(temp_alarm_get_status(&status), 0,
+		      "get_status must succeed even after a fetch error");
+	zassert_equal(status.last_error, -EIO,
+		      "get_status must report the last error from the sensor driver");
 }
 
 ZTEST(temp_alarm_sensor_errors, test_fail_then_recover)
 {
 	fake_sensor_sample_fetch_fake.return_val = -EIO;
+	sensor_fake_set_temperature(20);
 	zassert_equal(temp_alarm_check(), -EIO,
 		      "the first fetch error must be propagated");
 	zassert_equal(fake_sensor_sample_fetch_fake.call_count, 1,
 		      "the first check must fetch once");
+	struct temp_alarm_status status;
+	zassert_equal(temp_alarm_get_status(&status), 0,
+		      "get_status must succeed even after a fetch error");
+	zassert_equal(status.last_temp, 20, "get_status must report the last temperature");
+	zassert_equal(status.is_alarming, false, "get_status must report the last alarm state");
+	zassert_equal(status.last_error, -EIO, "get_status must report the last error");
 
 	fake_sensor_sample_fetch_fake.return_val = 0;
 	zassert_equal(temp_alarm_check(), 0,
@@ -114,4 +131,8 @@ ZTEST(temp_alarm_invalid_input, test_set_threshold_out_of_range)
 		      "set_threshold must reject a threshold below the allowed range");
 	zassert_equal(temp_alarm_set_threshold(101), -EINVAL,
 		      "set_threshold must reject a threshold above the allowed range");
+	int threshold = 0;
+	temp_alarm_get_threshold(&threshold);
+	zassert_equal(threshold, DEFAULT_THRESHOLD,
+		      "the threshold must not have changed after a rejected set");
 }
