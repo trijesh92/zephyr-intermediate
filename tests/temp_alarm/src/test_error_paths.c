@@ -80,16 +80,22 @@ ZTEST(temp_alarm_sensor_errors, test_fail_then_recover)
 		      "the first fetch error must be propagated");
 	zassert_equal(fake_sensor_sample_fetch_fake.call_count, 1,
 		      "the first check must fetch once");
+					
 	struct temp_alarm_status status;
 	zassert_equal(temp_alarm_get_status(&status), 0,
 		      "get_status must succeed even after a fetch error");
-	zassert_equal(status.last_temp, 20, "get_status must report the last temperature");
+	zassert_equal(status.last_temp, 0, "get_status must report the last temperature");
 	zassert_equal(status.is_alarming, false, "get_status must report the last alarm state");
 	zassert_equal(status.last_error, -EIO, "get_status must report the last error");
 
 	fake_sensor_sample_fetch_fake.return_val = 0;
+	sensor_fake_set_temperature(20);
 	zassert_equal(temp_alarm_check(), 0,
 		      "the module must recover when the next fetch succeeds");
+	zassert_equal(temp_alarm_get_status(&status), 0,
+		      "get_status must succeed even after a fetch error");
+	zassert_equal(status.last_temp, 20, "get_status must report the last temperature");
+	zassert_equal(status.is_alarming, false, "get_status must report the last alarm state");
 	zassert_equal(fake_sensor_sample_fetch_fake.call_count, 2,
 		      "the second check must fetch again");
 	zassert_equal(fake_sensor_channel_get_fake.call_count, 1,
@@ -131,8 +137,14 @@ ZTEST(temp_alarm_invalid_input, test_set_threshold_out_of_range)
 		      "set_threshold must reject a threshold below the allowed range");
 	zassert_equal(temp_alarm_set_threshold(101), -EINVAL,
 		      "set_threshold must reject a threshold above the allowed range");
-	int threshold = 0;
-	temp_alarm_get_threshold(&threshold);
-	zassert_equal(threshold, DEFAULT_THRESHOLD,
-		      "the threshold must not have changed after a rejected set");
+
+	// check if threshold is still 30
+	struct temp_alarm_status status;
+	sensor_fake_set_temperature(31);
+	zassert_ok(temp_alarm_check(), "check must succeed");
+	zassert_ok(temp_alarm_get_status(&status), "get_status must succeed");
+
+	zassert_equal(status.last_temp, 31, "last_temp must be 31 C");
+	zassert_equal(status.alarm_count, 1U, "alarm_count must be 1");
+	zassert_true(status.is_alarming, "31 C must raise the alarm");
 }
