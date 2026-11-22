@@ -60,7 +60,7 @@ static void control_fn(void *p1, void *p2, void *p3)
 
     while (true) {
         struct control_event event;
-        sys_trace_named_event("event_entry", event.seq);
+        sys_trace_named_event("control_entry", 0,0);
         int ret = k_msgq_get(&control_queue, &event, K_FOREVER);
 
         if (ret != 0) {
@@ -83,7 +83,7 @@ static void control_fn(void *p1, void *p2, void *p3)
             LOG_INF("[CONTROL] event_done seq=%u latency=%ums",
                     event.seq, latency_ms);
         }
-        sys_trace_named_event("event_done", event.seq, latency_ms);
+        sys_trace_named_event("control_done", event.seq, latency_ms);
     }
 }
 
@@ -96,10 +96,12 @@ static void maintenance_fn(void *p1, void *p2, void *p3)
     ARG_UNUSED(p1); ARG_UNUSED(p2); ARG_UNUSED(p3);
 
     while (true) {
+        sys_trace_named_event("maintenance_entry", 0, 0);
         k_sem_take(&maintenance_start, K_FOREVER);
 
         /* This work is important, but it has no short deadline. */
         k_busy_wait(MAINTENANCE_LOAD_US);
+        sys_trace_named_event("maintenance_done", 0, 0);
     }
 }
 
