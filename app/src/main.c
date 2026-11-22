@@ -5,8 +5,8 @@
 LOG_MODULE_REGISTER(homework, LOG_LEVEL_INF);
 
 #define STACK_SIZE            2048
-#define CONTROL_PRIORITY         7
-#define MAINTENANCE_PRIORITY     4
+#define CONTROL_PRIORITY         4
+#define MAINTENANCE_PRIORITY     7
 #define EVENT_PERIOD_MS        250
 #define MAINTENANCE_LOAD_US  45000
 #define DEADLINE_MS            10
@@ -43,7 +43,8 @@ static void event_timer_expiry(struct k_timer *timer)
     /* Both threads become ready when the timer interrupt returns. */
     k_sem_give(&maintenance_start);
 
-    /* TODO: Add an application trace event for this sequence. */
+    /* Add an application trace event for this sequence. */
+    sys_trace_named_event("event_ready", event.seq, 0);
 }
 
 K_TIMER_DEFINE(event_timer, event_timer_expiry, NULL);
@@ -59,6 +60,7 @@ static void control_fn(void *p1, void *p2, void *p3)
 
     while (true) {
         struct control_event event;
+        sys_trace_named_event("event_entry", event.seq);
         int ret = k_msgq_get(&control_queue, &event, K_FOREVER);
 
         if (ret != 0) {
@@ -81,7 +83,6 @@ static void control_fn(void *p1, void *p2, void *p3)
             LOG_INF("[CONTROL] event_done seq=%u latency=%ums",
                     event.seq, latency_ms);
         }
-        /* Add an application trace event for completion. */
         sys_trace_named_event("event_done", event.seq, latency_ms);
     }
 }
