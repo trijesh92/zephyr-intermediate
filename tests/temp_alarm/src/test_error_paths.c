@@ -100,6 +100,8 @@ ZTEST(temp_alarm_sensor_errors, test_fail_then_recover)
 		      "the second check must fetch again");
 	zassert_equal(fake_sensor_channel_get_fake.call_count, 1,
 		      "the channel must be read after the successful fetch");
+	zassert_equal(status.last_error, -EIO,
+		      "get_status must report the last error from the sensor driver");
 }
 
 /*
